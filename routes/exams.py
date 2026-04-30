@@ -155,77 +155,90 @@ async def trigger_grading(attempt_id: str, background_tasks: BackgroundTasks, db
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-async def process_full_attempt_grading(attempt_id: str, submissions: List[dict], db):
+async def aggregate_and_finalize_scores(attempt_id: str, ai_theory_score: int, db):
     """
-    Background worker to grade each theory submission and aggregate scores.
-    Dynamic Logic: Uses exam-specific compulsory_questions and marking_config.
+    Combines raw Theory and MCQ scores, scales them to 100, and updates the DB.
     """
     try:
-        # 1. Fetch current attempt and its exam configuration
+        # 1. Fetch attempt and exam config
         attempt_res = db.table("exam_attempts").select("total_score, status, exam_id").eq("id", attempt_id).single().execute()
-        current_total = attempt_res.data.get("total_score", 0)
+        # If Theory is already marked, 'total_score' might be the raw MCQ score 
+        # or the final scaled score. This is why we need clear RAW buckets.
+        # For now, we assume 'total_score' holds the raw MCQ points if not yet 'graded'.
+        mcq_raw_score = attempt_res.data.get("total_score", 0)
         exam_id = attempt_res.data.get("exam_id")
         
         exam_res = db.table("exams").select("*").eq("id", exam_id).single().execute()
         exam_data = exam_res.data or {}
         
-        # Marking Configuration (Defaults to WAEC Standard)
-        compulsory_count = exam_data.get('compulsory_questions', 5)
-        elective_pick = 5  # Standard for most WAEC Part B
         section_a_max = 40
         section_b_max = 60
         mcq_max = 50
         total_possible = section_a_max + section_b_max + mcq_max # 150
-        result = await run_grader(
-            attempt_id=attempt_id,
-            submissions=submissions
-        )
         
+        raw_grand_total = mcq_raw_score + ai_theory_score
+        final_percentage = round((raw_grand_total / total_possible) * 100)
+        
+        # 2. Update status and final score
+        db.table("exam_attempts").update({
+            "status": "graded",
+            "total_score": final_percentage,
+            "end_time": datetime.utcnow().isoformat()
+        }).eq("id", attempt_id).execute()
+        
+        print(f"--- AGGREGATION COMPLETE: Theory Raw: {ai_theory_score}, MCQ Raw: {mcq_raw_score}, Final: {final_percentage}% ---")
+        return final_percentage
+    except Exception as e:
+        print(f"Aggregation Error: {e}")
+        return 0
+
+async def process_full_attempt_grading(attempt_id: str, submissions: List[dict], db):
+    """
+    Background worker to grade each theory submission and aggregate scores.
+    """
+    try:
+        # 1. Fetch attempt and exam config
+        attempt_res = db.table("exam_attempts").select("exam_id").eq("id", attempt_id).single().execute()
+        exam_id = attempt_res.data.get("exam_id")
+        
+        exam_res = db.table("exams").select("compulsory_questions").eq("id", exam_id).single().execute()
+        compulsory_count = exam_res.data.get('compulsory_questions', 5)
+        
+        # 2. Run AI Grader
+        result = await run_grader(attempt_id=attempt_id, submissions=submissions)
         grading_results = result.get("grading_results", [])
         
         # Section A/B Logic
         part_a_score = 0
         part_b_scores = []
-        
         for res in grading_results:
             try:
                 q_num = int(res.get("question_number", 0))
                 score = res.get("score", 0)
-                
                 if 1 <= q_num <= compulsory_count:
                     part_a_score += score
                 else:
                     part_b_scores.append(score)
-            except (ValueError, TypeError):
-                continue
+            except: continue
         
-        # Take top X from Section B (Elective Pick)
         part_b_scores.sort(reverse=True)
-        part_b_score = sum(part_b_scores[:elective_pick])
-        
+        part_b_score = sum(part_b_scores[:5]) # Pick top 5
         ai_theory_score = part_a_score + part_b_score
         
-        # 3. Aggregate with MCQ
+        # 3. Check if MCQ is done to finalize
         resp_res = db.table("exam_responses").select("id", count="exact").eq("attempt_id", attempt_id).execute()
         has_mcq = resp_res.count > 0 if resp_res.count is not None else False
         
-        mcq_score = current_total 
-        raw_grand_total = mcq_score + ai_theory_score
-        
-        # Scale to 100 based on total_possible
-        final_percentage = round((raw_grand_total / total_possible) * 100)
-        
-        # 4. Update status
-        new_status = "graded" if has_mcq else "theory_marked"
-        
-        db.table("exam_attempts").update({
-            "status": new_status,
-            "total_score": final_percentage,
-            "end_time": datetime.utcnow().isoformat()
-        }).eq("id", attempt_id).execute()
-        
-        print(f"--- GRADING COMPLETE: Q1-5: {part_a_score}, Q6-13 (Top 5): {part_b_score}, Theory: {ai_theory_score}, MCQ: {mcq_score}, Final: {final_percentage}%, Status: {new_status} ---")
-        
+        if has_mcq:
+            await aggregate_and_finalize_scores(attempt_id, ai_theory_score, db)
+        else:
+            # Just mark theory as done, wait for MCQs
+            db.table("exam_attempts").update({
+                "status": "theory_marked",
+                "total_score": ai_theory_score # Temporarily store raw theory
+            }).eq("id", attempt_id).execute()
+            print(f"Theory Grading Done: {ai_theory_score} points. Waiting for MCQs.")
+
     except Exception as e:
         print(f"CRITICAL ERROR in process_full_attempt_grading: {str(e)}")
         import traceback
@@ -234,6 +247,7 @@ async def process_full_attempt_grading(attempt_id: str, submissions: List[dict],
 async def grade_mcq(attempt_id: str, db=Depends(get_db)):
     """
     Grades MCQ responses by parsing the marking_scheme and updates the attempt.
+    Updates the 'total_score' column with the raw MCQ points for later aggregation.
     """
     print(f"🚀 GRADING MCQs for attempt: {attempt_id}")
     try:
@@ -244,7 +258,6 @@ async def grade_mcq(attempt_id: str, db=Depends(get_db)):
             return {"status": "success", "mcq_score": 0, "total_mcq": 0}
 
         # 2. Fetch questions
-        # Get exam_id first
         attempt_res = db.table("exam_attempts").select("exam_id").eq("id", attempt_id).single().execute()
         exam_id = attempt_res.data["exam_id"]
         
@@ -256,30 +269,45 @@ async def grade_mcq(attempt_id: str, db=Depends(get_db)):
         
         for resp in responses:
             q_id = resp["question_id"]
-            student_choice = resp["selected_option"] # e.g. "A"
+            student_choice = resp["selected_option"]
             
             marking = questions_map.get(q_id, "")
-            # Pattern: Equation: A = ... or similar
-            # We look for the first capital letter followed by " =" or " ="
             match = re.search(r"Equation:\s*([A-D])\s*=", marking)
             if match:
                 correct_option = match.group(1)
                 if student_choice == correct_option:
                     score += 1
             else:
-                # Fallback: check if the choice ID is mentioned in the logic or equation
-                # This is a bit looser
                 if f" {student_choice} =" in marking or f" {student_choice}=" in marking:
                     score += 1
 
-        # 3. Update the attempt score
-        db.table("exam_attempts").update({
-            "mcq_score": score,
-            "total_mcq": len(q_res.data)
-        }).eq("id", attempt_id).execute()
-
-        print(f"✅ MCQ Grading Complete: {score}/{len(q_res.data)}")
-        return {"status": "success", "mcq_score": score, "total_mcq": len(q_res.data)}
+        # 3. Update the attempt score and status
+        current_status = attempt_res.data.get("status", "pending")
+        theory_raw_score = 0
+        
+        # Check if theory_submissions exist
+        theory_res = db.table("theory_submissions").select("id", count="exact").eq("attempt_id", attempt_id).execute()
+        has_theory = theory_res.count > 0 if theory_res.count is not None else False
+        
+        if current_status == "theory_marked" or has_theory:
+            # Theory is already marked. The current total_score is the raw theory points.
+            theory_raw_score = attempt_res.data.get("total_score", 0)
+            
+            # Now we set total_score to raw MCQ score so the aggregator can pick it up
+            db.table("exam_attempts").update({"total_score": score}).eq("id", attempt_id).execute()
+            
+            # Aggregate
+            await aggregate_and_finalize_scores(attempt_id, theory_raw_score, db)
+            return {"status": "success", "mcq_score": score, "total_mcq": len(q_res.data), "finalized": True}
+        else:
+            # Just mark MCQ as done, Theory is still pending
+            db.table("exam_attempts").update({
+                "status": "mcq_marked",
+                "total_score": score # Store raw MCQ
+            }).eq("id", attempt_id).execute()
+            
+            print(f"✅ MCQ Grading Complete: {score}/{len(q_res.data)}. Waiting for Theory.")
+            return {"status": "success", "mcq_score": score, "total_mcq": len(q_res.data), "finalized": False}
 
     except Exception as e:
         print(f"ERROR grading MCQs: {e}")

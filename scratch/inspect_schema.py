@@ -8,12 +8,9 @@ url = os.getenv("SUPABASE_URL")
 key = os.getenv("SUPABASE_KEY")
 supabase = create_client(url, key)
 
-# Get one MCQ question
-res = supabase.table("questions").select("*").eq("is_mcq", True).limit(1).execute()
+# Get one attempt
+res = supabase.table("exam_attempts").select("*").limit(1).execute()
 if res.data:
-    q = res.data[0]
-    print("Question Text:", q.get("question_text"))
-    print("Options:", q.get("options"))
-    print("Marking Scheme:", q.get("marking_scheme"))
+    print("Columns in 'exam_attempts':", res.data[0].keys())
 else:
-    print("No MCQ questions found.")
+    print("No attempts found.")
