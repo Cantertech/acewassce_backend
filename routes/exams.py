@@ -172,10 +172,11 @@ async def aggregate_and_finalize_scores(attempt_id: str, db):
         section_a_max = 40
         section_b_max = 60
         mcq_max = 50
-        total_possible = section_a_max + section_b_max + mcq_max # 150
-        
         raw_grand_total = mcq_raw + theory_raw
-        final_percentage = round((raw_grand_total / total_possible) * 100)
+        
+        # Scaling: WAEC Core Maths is typically 150 points (50 MCQ + 100 Theory)
+        total_possible = 150
+        final_percentage = round((raw_grand_total / total_possible) * 100) if total_possible > 0 else 0
         
         # 2. Update status and final aggregate score
         db.table("exam_attempts").update({
@@ -206,6 +207,7 @@ async def process_full_attempt_grading(attempt_id: str, submissions: List[dict],
         # 2. Run AI Grader
         result = await run_grader(attempt_id=attempt_id, submissions=submissions)
         grading_results = result.get("grading_results", [])
+        print(f"DEBUG: AI returned {len(grading_results)} grading results.")
         
         part_a_score = 0
         part_b_scores = []
@@ -216,10 +218,13 @@ async def process_full_attempt_grading(attempt_id: str, submissions: List[dict],
                 score = res.get("score", 0)
                 reasoning = res.get("summative_reasoning", "")
                 
+                print(f"DEBUG: Processing Q{q_num} | Score: {score}")
+
                 # Update individual theory submission record with detailed feedback
+                # NOTE: DB uses 'marks_attained' not 'score'
                 db.table("theory_submissions").update({
-                    "score": score,
-                    "feedback": reasoning,
+                    "marks_attained": score,
+                    "feedback": f"[EXAMINER REASONING]: {reasoning}",
                     "status": "graded"
                 }).eq("attempt_id", attempt_id).eq("question_number", q_num_str).execute()
 
@@ -227,11 +232,14 @@ async def process_full_attempt_grading(attempt_id: str, submissions: List[dict],
                     part_a_score += score
                 else:
                     part_b_scores.append(score)
-            except: continue
+            except Exception as loop_e: 
+                print(f"Loop Error on Q{res.get('question_number')}: {loop_e}")
+                continue
         
         part_b_scores.sort(reverse=True)
-        part_b_score = sum(part_b_scores[:5])
+        part_b_score = sum(part_b_scores[:5]) # WAEC: Pick best 5 from Part B
         ai_theory_score = part_a_score + part_b_score
+        print(f"DEBUG: Final Theory Score Calculation: PartA={part_a_score} + PartB={part_b_score} = {ai_theory_score}")
         
         # 3. Update Granular Theory Score
         db.table("exam_attempts").update({

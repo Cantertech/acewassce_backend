@@ -170,17 +170,12 @@ async def batch_grade_node(state: GradingState):
                 
                 total_score += score
                 
-                detail_data = {
-                    "attempt_id": state["attempt_id"],
-                    "question_number": int(q_num),
-                    "marks_attained": score,
-                    "max_marks": question.get("points", 10),
-                    "feedback": f"[SUMMARIZED REASONING]: {reasoning} | [TRANSCRIPT]: {ocr}",
-                    "image_url": urls[0] 
-                }
-                db.table("theory_submissions").insert(detail_data).execute()
-                
-                results.append({"question_number": q_num, "score": score, "reasoning": reasoning})
+                results.append({
+                    "question_number": q_num, 
+                    "score": score, 
+                    "summative_reasoning": reasoning,
+                    "ocr": ocr
+                })
                 break # Exit the retry loop on success
             except Exception as e:
                 error_msg = str(e).lower()
