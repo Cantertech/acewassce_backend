@@ -43,8 +43,12 @@ async def router_node(state: GradingState):
                 import re
                 # Split by comma or space and clean up
                 raw_parts = re.split(r'[,|\s]', manual_tags)
-                q_nums = [p.strip() for p in raw_parts if p.strip()]
-                print(f"DEBUG [Router]: Using MANUAL TAGS for Image: {q_nums}")
+                # Normalize: Strip letters (e.g., 9a -> 9) to match DB question numbers
+                q_nums = [re.sub(r'[^0-9]', '', p.strip()) for p in raw_parts if p.strip()]
+                # Filter out empty results after regex
+                q_nums = [n for n in q_nums if n]
+                
+                print(f"DEBUG [Router]: Using NORMALIZED MANUAL TAGS: {q_nums}")
             else:
                 # Fallback to AI Identification
                 system_prompt = (
