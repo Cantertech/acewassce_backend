@@ -24,9 +24,9 @@ class GradingState(TypedDict):
 
 async def router_node(state: GradingState):
     """
-    Identifies which question each image belongs to by reading handwriting.
+    Identifies ALL question numbers present on each image.
     """
-    print(f"--- [NODE: Router] Analyzing {len(state['submissions'])} images for question numbers ---")
+    print(f"--- [NODE: Router] Identifying ALL questions in {len(state['submissions'])} images ---")
     llm = ChatOpenAI(model="gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
     
     routed = {}
@@ -35,9 +35,9 @@ async def router_node(state: GradingState):
         image_url = sub['image_url']
         
         system_prompt = (
-            "You are an image router. Look at this student's handwritten math paper. "
-            "Identify the question number written on top of the page. "
-            "Only return the number (e.g. '4', '5', '12'). If no number is clear, return 'unknown'."
+            "You are a document scanner. Look at this student's handwritten paper. "
+            "Identify EVERY question number present on this page. Students often write multiple answers (e.g., 6, 7, and 8) on one sheet. "
+            "Return a comma-separated list of numbers only (e.g. '6, 7, 8'). If none are found, return 'unknown'."
         )
 
         message = HumanMessage(
@@ -49,61 +49,65 @@ async def router_node(state: GradingState):
         
         try:
             response = await llm.ainvoke([message])
-            q_num = response.content.strip().lower().replace("question", "").replace("q", "").strip()
+            raw_nums = response.content.strip().lower().replace("questions", "").replace("question", "").replace("q", "").strip()
             
-            print(f"DEBUG [Router]: Image identified as Question {q_num}")
+            # Extract list of numbers
+            q_nums = [n.strip() for n in raw_nums.split(",") if n.strip().isdigit()]
             
-            if q_num not in routed:
-                routed[q_num] = []
-            routed[q_num].append(image_url)
+            print(f"DEBUG [Router]: Image contains Questions: {q_nums if q_nums else 'None'}")
+            
+            for q_num in q_nums:
+                if q_num not in routed:
+                    routed[q_num] = []
+                routed[q_num].append(image_url)
         except Exception as e:
             print(f"Routing error for image: {e}")
             
     state["routed_work"] = routed
-    print(f"--- [ROUTING COMPLETE] Groups: {list(routed.keys())} ---")
+    print(f"--- [ROUTING COMPLETE] Master Map: {list(routed.keys())} ---")
     return state
 
 async def batch_grade_node(state: GradingState):
     """
-    Grades each identified question group against the marking scheme.
+    Grades each identified question group against the marking scheme with strict adherence.
     """
-    print(f"--- [NODE: Batch Grade] Starting evaluation for {len(state['routed_work'])} questions ---")
+    print(f"--- [NODE: Batch Grade] Commencing strict rubric-based evaluation ---")
     llm = ChatOpenAI(model="gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
     db = get_db()
     
     results = []
     total_score = 0
     
-    # 1. Get Exam ID for this attempt to fetch theory questions
+    # 1. Get Exam ID
     attempt_res = db.table("exam_attempts").select("exam_id").eq("id", state["attempt_id"]).single().execute()
     exam_id = attempt_res.data["exam_id"]
     
-    # 2. Fetch all theory questions for this exam
+    # 2. Fetch all theory questions
     q_res = db.table("questions").select("*").eq("exam_id", exam_id).eq("is_mcq", False).execute()
     questions_map = {str(q["question_number"]): q for q in q_res.data}
 
     for q_num, urls in state["routed_work"].items():
         if q_num not in questions_map:
-            print(f"WARNING: Q{q_num} skipped (No rubric found in database).")
+            print(f"WARNING: Q{q_num} skipped (No marking scheme found).")
             continue
             
         question = questions_map[q_num]
-        print(f"\n--- [FORENSIC GRADING] Question {q_num} ---")
+        print(f"\n--- [STRICT MARKING] Question {q_num} (Max Marks: {question.get('points', 10)}) ---")
         
-        # Robustly get marking scheme
         rubric = question.get('marking_scheme') or question.get('rubric') or question.get('marking_guide') or "Grade based on standard WAEC marking criteria."
-        print(f"DEBUG: Using Rubric (first 100 chars): {rubric[:100]}...")
         
-        # Combine all images for this question into one evaluation
         eval_prompt = (
-            f"You are a strict WAEC Examiner. Evaluate the student's handwritten workings against the rubric.\n\n"
-            f"RUBRIC for Q{q_num}:\n{rubric}\n\n"
-            "STUDENT WORKINGS (Images attached below):\n"
-            "Identify what the student wrote, compare it to the marking guide, and award marks for method and accuracy."
+            f"You are a Senior WAEC Examiner. Your task is to award marks SOLELY based on the provided MARKING SCHEME.\n\n"
+            f"OFFICIAL MARKING SCHEME for Q{q_num}:\n{rubric}\n\n"
+            "STUDENT WORKINGS (Images attached):\n"
+            "1. Transcribe the student's work for this specific question.\n"
+            "2. Match each step of the student's work to the marking scheme.\n"
+            "3. Award marks for Method (M) and Accuracy (A) exactly as per the scheme.\n"
+            "4. Provide a summative reasoning for the total marks awarded."
         )
         
         messages = [
-            SystemMessage(content="Output JSON only: { 'score': int, 'feedback': 'string', 'ocr_transcript': 'string' }"),
+            SystemMessage(content="Output JSON only: { 'score': int, 'summative_reasoning': 'string', 'ocr_transcript': 'string' }"),
             HumanMessage(content=[{"type": "text", "text": eval_prompt}])
         ]
         
@@ -116,33 +120,28 @@ async def batch_grade_node(state: GradingState):
             grading = json.loads(content)
             
             score = grading.get("score", 0)
-            feedback = grading.get("feedback", "No feedback.")
+            reasoning = grading.get("summative_reasoning", "No reasoning provided.")
             ocr = grading.get("ocr_transcript", "Not extracted.")
             
-            print(f"AI EXTRACTED: \"{ocr[:200]}...\"")
-            print(f"AI REASONING: {feedback}")
-            print(f"RESULT: {score} marks awarded.\n")
+            print(f"EXTRACTED WORK: \"{ocr[:300]}...\"")
+            print(f"RUBRIC COMPLIANCE: {reasoning}")
+            print(f"FINAL MARK: {score}/{question.get('points', 10)}")
             
             total_score += score
             
-            # Save detail record
             detail_data = {
                 "attempt_id": state["attempt_id"],
                 "question_number": int(q_num),
                 "marks_attained": score,
                 "max_marks": question.get("points", 10),
-                "feedback": f"[OCR: {ocr}] {feedback}",
+                "feedback": f"[SUMMARIZED REASONING]: {reasoning} | [TRANSCRIPT]: {ocr}",
                 "image_url": urls[0] 
             }
             db.table("theory_submissions").insert(detail_data).execute()
             
-            results.append({
-                "question_number": q_num,
-                "score": score,
-                "feedback": feedback
-            })
+            results.append({"question_number": q_num, "score": score, "reasoning": reasoning})
         except Exception as e:
-            print(f"!!! CRITICAL GRADING FAILURE for Q{q_num}: {e}")
+            print(f"!!! FAILURE GRADING Q{q_num}: {e}")
 
     state["grading_results"] = results
     state["total_score"] = total_score
