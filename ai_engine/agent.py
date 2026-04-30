@@ -51,6 +51,8 @@ async def router_node(state: GradingState):
             response = await llm.ainvoke([message])
             q_num = response.content.strip().lower().replace("question", "").replace("q", "").strip()
             
+            print(f"DEBUG [Router]: Image identified as Question {q_num}")
+            
             if q_num not in routed:
                 routed[q_num] = []
             routed[q_num].append(image_url)
@@ -58,13 +60,14 @@ async def router_node(state: GradingState):
             print(f"Routing error for image: {e}")
             
     state["routed_work"] = routed
+    print(f"--- [ROUTING COMPLETE] Groups: {list(routed.keys())} ---")
     return state
 
 async def batch_grade_node(state: GradingState):
     """
     Grades each identified question group against the marking scheme.
     """
-    print(f"--- [NODE: Batch Grade] Grading {len(state['routed_work'])} questions ---")
+    print(f"--- [NODE: Batch Grade] Starting evaluation for {len(state['routed_work'])} questions ---")
     llm = ChatOpenAI(model="gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
     db = get_db()
     
@@ -81,23 +84,26 @@ async def batch_grade_node(state: GradingState):
 
     for q_num, urls in state["routed_work"].items():
         if q_num not in questions_map:
-            print(f"Skipping Q{q_num}: Not found in exam questions.")
+            print(f"WARNING: Q{q_num} skipped (No rubric found in database).")
             continue
             
         question = questions_map[q_num]
-        print(f"--- Grading Question {q_num} ---")
+        print(f"\n--- [FORENSIC GRADING] Question {q_num} ---")
         
         # Robustly get marking scheme
         rubric = question.get('marking_scheme') or question.get('rubric') or question.get('marking_guide') or "Grade based on standard WAEC marking criteria."
+        print(f"DEBUG: Using Rubric (first 100 chars): {rubric[:100]}...")
         
         # Combine all images for this question into one evaluation
         eval_prompt = (
+            f"You are a strict WAEC Examiner. Evaluate the student's handwritten workings against the rubric.\n\n"
             f"RUBRIC for Q{q_num}:\n{rubric}\n\n"
-            "STUDENT WORKINGS (Multiple Images):\n"
+            "STUDENT WORKINGS (Images attached below):\n"
+            "Identify what the student wrote, compare it to the marking guide, and award marks for method and accuracy."
         )
         
         messages = [
-            SystemMessage(content="You are a strict WAEC examiner. Evaluate the student's workings across all images. Output JSON: { 'score': int, 'feedback': 'string' }"),
+            SystemMessage(content="Output JSON only: { 'score': int, 'feedback': 'string', 'ocr_transcript': 'string' }"),
             HumanMessage(content=[{"type": "text", "text": eval_prompt}])
         ]
         
@@ -110,7 +116,12 @@ async def batch_grade_node(state: GradingState):
             grading = json.loads(content)
             
             score = grading.get("score", 0)
-            feedback = grading.get("feedback", "No feedback provided.")
+            feedback = grading.get("feedback", "No feedback.")
+            ocr = grading.get("ocr_transcript", "Not extracted.")
+            
+            print(f"AI EXTRACTED: \"{ocr[:200]}...\"")
+            print(f"AI REASONING: {feedback}")
+            print(f"RESULT: {score} marks awarded.\n")
             
             total_score += score
             
@@ -120,8 +131,8 @@ async def batch_grade_node(state: GradingState):
                 "question_number": int(q_num),
                 "marks_attained": score,
                 "max_marks": question.get("points", 10),
-                "feedback": feedback,
-                "image_url": urls[0] # Using first image as primary reference
+                "feedback": f"[OCR: {ocr}] {feedback}",
+                "image_url": urls[0] 
             }
             db.table("theory_submissions").insert(detail_data).execute()
             
@@ -131,7 +142,7 @@ async def batch_grade_node(state: GradingState):
                 "feedback": feedback
             })
         except Exception as e:
-            print(f"Grading failed for Q{q_num}: {e}")
+            print(f"!!! CRITICAL GRADING FAILURE for Q{q_num}: {e}")
 
     state["grading_results"] = results
     state["total_score"] = total_score
