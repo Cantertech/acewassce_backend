@@ -89,13 +89,28 @@ async def upload_working(
             # Fallback to original content if Pillow fails
             optimized_content = raw_content
 
-        # 3. Upload to Supabase Storage (bucket: wassce_workings)
+        # 3. Upload to Supabase Storage (bucket: wassce_workings) with RETRY
         print(f"DEBUG: Uploading to Supabase bucket 'wassce_workings' at path {file_name}")
-        storage_response = db.storage.from_("wassce_workings").upload(
-            path=file_name,
-            file=optimized_content,
-            file_options={"content-type": "image/jpeg"}
-        )
+        
+        max_retries = 3
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                storage_response = db.storage.from_("wassce_workings").upload(
+                    path=file_name,
+                    file=optimized_content,
+                    file_options={"content-type": "image/jpeg"}
+                )
+                print(f"DEBUG: Upload successful on attempt {attempt + 1}")
+                break
+            except Exception as upload_err:
+                last_error = upload_err
+                print(f"WARNING: Upload attempt {attempt + 1} failed: {str(upload_err)}")
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(1) # Wait a bit before retrying
+                else:
+                    raise upload_err
         
         # 3. Get Public URL
         image_url = db.storage.from_("wassce_workings").get_public_url(file_name)
