@@ -291,8 +291,3 @@ async def grade_mcq(attempt_id: str, db=Depends(get_db)):
     except Exception as e:
         print(f"ERROR grading MCQs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-lse}
-
-    except Exception as e:
-        print(f"ERROR grading MCQs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
