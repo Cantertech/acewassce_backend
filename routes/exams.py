@@ -41,14 +41,15 @@ async def start_attempt(request: AttemptStartRequest, db=Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/{attempt_id}/upload-working")
-async def upload_working(attempt_id: str, question_number: int, file: UploadFile = File(...), db=Depends(get_db)):
+async def upload_working(attempt_id: str, question_number: Optional[int] = None, is_general: bool = False, file: UploadFile = File(...), db=Depends(get_db)):
     """
     Uploads an image file to Supabase Storage and saves the URL to theory_submissions.
     """
     try:
         # 1. Generate unique filename
         file_extension = file.filename.split(".")[-1]
-        file_name = f"{attempt_id}/{question_number}_{uuid.uuid4()}.{file_extension}"
+        folder = "general" if is_general else str(question_number)
+        file_name = f"{attempt_id}/{folder}/{uuid.uuid4()}.{file_extension}"
         
         # 2. Upload to Supabase Storage (bucket: wassce_workings)
         content = await file.read()
@@ -65,7 +66,8 @@ async def upload_working(attempt_id: str, question_number: int, file: UploadFile
         theory_data = {
             "attempt_id": attempt_id,
             "question_number": question_number,
-            "image_url": image_url
+            "image_url": image_url,
+            "is_general": is_general
         }
         db.table("theory_submissions").insert(theory_data).execute()
         
@@ -80,7 +82,7 @@ async def trigger_grading(attempt_id: str, background_tasks: BackgroundTasks, db
     """
     try:
         # 1. Fetch all submissions for this attempt
-        response = db.table("theory_submissions").select("id", "image_url", "question_id").eq("attempt_id", attempt_id).execute()
+        response = db.table("theory_submissions").select("id", "image_url", "question_id", "question_number", "is_general").eq("attempt_id", attempt_id).execute()
         submissions = response.data
         
         if not submissions:
@@ -99,16 +101,13 @@ async def process_full_attempt_grading(attempt_id: str, submissions: List[dict],
     """
     total_score = 0
     try:
-        for sub in submissions:
-            print(f"Propagating grading for submission: {sub['id']}")
-            # Each call to run_grader represents one LangGraph workflow execution
-            # We pass the submission record ID as the attempt_id for the graph's saving node
-            result = await run_grader(
-                attempt_id=sub["id"], 
-                question_id=sub["question_id"],
-                image_url=sub["image_url"]
-            )
-            total_score += result.get("final_score", 0)
+        # In the new flow, we pass ALL submissions to one run_grader call 
+        # which will perform the routing and batch grading.
+        result = await run_grader(
+            attempt_id=attempt_id,
+            submissions=submissions
+        )
+        total_score = result.get("total_score", 0)
         
         # Finally, update the main exam_attempt status to 'graded'
         db.table("exam_attempts").update({
