@@ -132,41 +132,51 @@ async def batch_grade_node(state: GradingState):
         for url in urls:
             messages[1].content.append({"type": "image_url", "image_url": {"url": url}})
             
-        try:
-            # RATE LIMIT PROTECTION: 3.0 second delay
-            import asyncio
-            await asyncio.sleep(3.0)
-            
-            response = await llm.ainvoke(messages)
-            content = response.content.replace("```json", "").replace("```", "").strip()
-            grading = json.loads(content)
-            
-            # CAP THE SCORE AT MAX MARKS
-            raw_score = grading.get("score", 0)
-            score = min(raw_score, max_p)
-            
-            reasoning = grading.get("summative_reasoning", "No reasoning provided.")
-            ocr = grading.get("ocr_transcript", "Not extracted.")
-            
-            print(f"EXTRACTED WORK: \"{ocr[:300]}...\"")
-            print(f"RUBRIC COMPLIANCE: {reasoning}")
-            print(f"FINAL MARK: {score}/{max_p}")
-            
-            total_score += score
-            
-            detail_data = {
-                "attempt_id": state["attempt_id"],
-                "question_number": int(q_num),
-                "marks_attained": score,
-                "max_marks": question.get("points", 10),
-                "feedback": f"[SUMMARIZED REASONING]: {reasoning} | [TRANSCRIPT]: {ocr}",
-                "image_url": urls[0] 
-            }
-            db.table("theory_submissions").insert(detail_data).execute()
-            
-            results.append({"question_number": q_num, "score": score, "reasoning": reasoning})
-        except Exception as e:
-            print(f"!!! FAILURE GRADING Q{q_num}: {e}")
+        for attempt in range(5): # Retry up to 5 times
+            try:
+                # RATE LIMIT PROTECTION: 3.0 second delay
+                import asyncio
+                await asyncio.sleep(3.0)
+                
+                response = await llm.ainvoke(messages)
+                content = response.content.replace("```json", "").replace("```", "").strip()
+                grading = json.loads(content)
+                
+                # CAP THE SCORE AT MAX MARKS
+                raw_score = grading.get("score", 0)
+                score = min(raw_score, max_p)
+                
+                reasoning = grading.get("summative_reasoning", "No reasoning provided.")
+                ocr = grading.get("ocr_transcript", "Not extracted.")
+                
+                print(f"EXTRACTED WORK: \"{ocr[:300]}...\"")
+                print(f"RUBRIC COMPLIANCE: {reasoning}")
+                print(f"FINAL MARK: {score}/{max_p}")
+                
+                total_score += score
+                
+                detail_data = {
+                    "attempt_id": state["attempt_id"],
+                    "question_number": int(q_num),
+                    "marks_attained": score,
+                    "max_marks": question.get("points", 10),
+                    "feedback": f"[SUMMARIZED REASONING]: {reasoning} | [TRANSCRIPT]: {ocr}",
+                    "image_url": urls[0] 
+                }
+                db.table("theory_submissions").insert(detail_data).execute()
+                
+                results.append({"question_number": q_num, "score": score, "reasoning": reasoning})
+                break # Exit the retry loop on success
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "rate limit" in error_msg or "429" in error_msg:
+                    wait_time = (attempt + 1) * 5 # wait 5s, 10s, 15s...
+                    print(f"!!! RATE LIMIT HIT on Q{q_num}: Waiting {wait_time}s before retry {attempt + 1}/5...")
+                    import asyncio
+                    await asyncio.sleep(wait_time)
+                else:
+                    print(f"!!! FAILURE GRADING Q{q_num}: {e}")
+                    break # Break on non-rate-limit errors
 
     state["grading_results"] = results
     state["total_score"] = total_score
