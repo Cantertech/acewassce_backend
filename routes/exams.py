@@ -3,8 +3,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 import uuid
-from backend.database import get_db
-from backend.ai_engine.agent import run_grader
+from database import get_db
+from ai_engine.agent import run_grader
 
 router = APIRouter(prefix="/api/v1/attempts", tags=["Exam Attempts"])
 

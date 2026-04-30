@@ -5,10 +5,7 @@ from dotenv import load_dotenv
 from langgraph.graph import StateGraph, START, END
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
-try:
-    from backend.database import get_db
-except ImportError:
-    from database import get_db
+from database import get_db
 
 load_dotenv()
 

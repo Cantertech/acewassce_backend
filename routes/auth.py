@@ -3,7 +3,7 @@ import httpx
 import random
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from backend.database import get_db
+from database import get_db
 
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
 
