@@ -105,19 +105,18 @@ async def batch_grade_node(state: GradingState):
             print(f"CRITICAL: No specific rubric for Q{q_num}. AI is NOT allowed to guess.")
             rubric = "ERROR: No marking scheme provided. Award 0 marks and state 'Missing Rubric' in feedback."
 
-        # Dynamically detect max marks from rubric text if the points column is missing
+        # Dynamically calculate total marks by summing all sub-part marks found in the rubric
         import re
-        max_marks_from_text = 10
-        match = re.search(r"TOTAL MARKS:\s*(\d+)", rubric)
-        if match:
-            max_marks_from_text = int(match.group(1))
-        
-        # Use DB column if available, else use extracted or default
-        max_p = question.get('points') or max_marks_from_text
+        # This matches "(Marks: 12)" or "TOTAL MARKS: 12"
+        all_marks = re.findall(r"(?:Marks:|TOTAL MARKS:)\s*(\d+)", rubric)
+        if all_marks:
+            max_p = sum(int(m) for m in all_marks)
+        else:
+            max_p = question.get('points') or 10
         
         eval_prompt = (
             f"You are a Senior WAEC Examiner. Your task is to award marks based on the provided OFFICIAL MARKING SCHEME.\n\n"
-            f"OFFICIAL MARKING SCHEME for Q{q_num} (Max: {max_p}):\n{rubric}\n\n"
+            f"OFFICIAL MARKING SCHEME for Q{q_num} (Max Marks for this entry: {max_p}):\n{rubric}\n\n"
             "STUDENT WORKINGS (Images attached):\n"
             "INSTRUCTIONS:\n"
             "1. TRANSCRIBE the student's work for this specific question accurately.\n"
