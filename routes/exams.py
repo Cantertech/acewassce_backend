@@ -46,7 +46,7 @@ async def start_attempt(request: AttemptStartRequest, db=Depends(get_db)):
 async def upload_working(
     attempt_id: str, 
     question_number: Optional[int] = Query(None), 
-    is_general: bool = Query(False), 
+    is_general: str = Query("false"), 
     file: UploadFile = File(...), 
     db=Depends(get_db)
 ):
@@ -56,7 +56,8 @@ async def upload_working(
     try:
         # 1. Generate unique filename
         file_extension = file.filename.split(".")[-1]
-        folder = "general" if is_general else str(question_number)
+        is_gen_bool = is_general.lower() == "true"
+        folder = "general" if is_gen_bool else str(question_number)
         file_name = f"{attempt_id}/{folder}/{uuid.uuid4()}.{file_extension}"
         
         # 2. OPTIMIZATION: Compress and Resize using Pillow
@@ -94,7 +95,7 @@ async def upload_working(
             "attempt_id": attempt_id,
             "question_number": question_number,
             "image_url": image_url,
-            "is_general": is_general
+            "is_general": is_gen_bool
         }
         db.table("theory_submissions").insert(theory_data).execute()
         
