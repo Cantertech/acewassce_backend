@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 import uuid
+import io
+from PIL import Image
 from database import get_db
 from ai_engine.agent import run_grader
 
@@ -57,12 +59,31 @@ async def upload_working(
         folder = "general" if is_general else str(question_number)
         file_name = f"{attempt_id}/{folder}/{uuid.uuid4()}.{file_extension}"
         
-        # 2. Upload to Supabase Storage (bucket: wassce_workings)
-        content = await file.read()
+        # 2. OPTIMIZATION: Compress and Resize using Pillow
+        raw_content = await file.read()
+        img = Image.open(io.BytesIO(raw_content))
+        
+        # Convert to RGB if necessary (to handle PNG/RGBA)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+            
+        # Resize if too large (Max width 1200px)
+        max_size = 1200
+        if img.width > max_size:
+            ratio = max_size / float(img.width)
+            new_height = int(float(img.height) * float(ratio))
+            img = img.resize((max_size, new_height), Image.Resampling.LANCZOS)
+            
+        # Save to buffer with high compression (Quality 70)
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=70, optimize=True)
+        optimized_content = buffer.getvalue()
+        
+        # 3. Upload to Supabase Storage (bucket: wassce_workings)
         storage_response = db.storage.from_("wassce_workings").upload(
             path=file_name,
-            file=content,
-            file_options={"content-type": file.content_type}
+            file=optimized_content,
+            file_options={"content-type": "image/jpeg"}
         )
         
         # 3. Get Public URL
