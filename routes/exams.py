@@ -230,3 +230,57 @@ async def process_full_attempt_grading(attempt_id: str, submissions: List[dict],
         print(f"CRITICAL ERROR in process_full_attempt_grading: {str(e)}")
         import traceback
         traceback.print_exc()
+@router.post("/{attempt_id}/grade-mcq")
+async def grade_mcq(attempt_id: str, db=Depends(get_db)):
+    """
+    Grades MCQ responses by parsing the marking_scheme and updates the attempt.
+    """
+    print(f"🚀 GRADING MCQs for attempt: {attempt_id}")
+    try:
+        # 1. Fetch student responses
+        res = db.table("exam_responses").select("*").eq("attempt_id", attempt_id).execute()
+        responses = res.data
+        if not responses:
+            return {"status": "success", "mcq_score": 0, "total_mcq": 0}
+
+        # 2. Fetch questions
+        # Get exam_id first
+        attempt_res = db.table("exam_attempts").select("exam_id").eq("id", attempt_id).single().execute()
+        exam_id = attempt_res.data["exam_id"]
+        
+        q_res = db.table("questions").select("id, marking_scheme").eq("exam_id", exam_id).eq("is_mcq", True).execute()
+        questions_map = {q["id"]: q["marking_scheme"] for q in q_res.data}
+
+        score = 0
+        import re
+        
+        for resp in responses:
+            q_id = resp["question_id"]
+            student_choice = resp["selected_option"] # e.g. "A"
+            
+            marking = questions_map.get(q_id, "")
+            # Pattern: Equation: A = ... or similar
+            # We look for the first capital letter followed by " =" or " ="
+            match = re.search(r"Equation:\s*([A-D])\s*=", marking)
+            if match:
+                correct_option = match.group(1)
+                if student_choice == correct_option:
+                    score += 1
+            else:
+                # Fallback: check if the choice ID is mentioned in the logic or equation
+                # This is a bit looser
+                if f" {student_choice} =" in marking or f" {student_choice}=" in marking:
+                    score += 1
+
+        # 3. Update the attempt score
+        db.table("exam_attempts").update({
+            "mcq_score": score,
+            "total_mcq": len(q_res.data)
+        }).eq("id", attempt_id).execute()
+
+        print(f"✅ MCQ Grading Complete: {score}/{len(q_res.data)}")
+        return {"status": "success", "mcq_score": score, "total_mcq": len(q_res.data)}
+
+    except Exception as e:
+        print(f"ERROR grading MCQs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
