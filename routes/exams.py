@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks, Query
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
@@ -41,7 +41,13 @@ async def start_attempt(request: AttemptStartRequest, db=Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/{attempt_id}/upload-working")
-async def upload_working(attempt_id: str, question_number: Optional[int] = None, is_general: bool = False, file: UploadFile = File(...), db=Depends(get_db)):
+async def upload_working(
+    attempt_id: str, 
+    question_number: Optional[int] = Query(None), 
+    is_general: bool = Query(False), 
+    file: UploadFile = File(...), 
+    db=Depends(get_db)
+):
     """
     Uploads an image file to Supabase Storage and saves the URL to theory_submissions.
     """
