@@ -1,3 +1,4 @@
+langchain-openai
 langchain-google-genai
 fastapi
 uvicorn
