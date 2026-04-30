@@ -91,12 +91,7 @@ async def batch_grade_node(state: GradingState):
             print(f"WARNING: Q{q_num} skipped (No marking scheme found in database).")
             continue
             
-        # Rate limit protection: Wait a bit before each question
-        import asyncio
-        await asyncio.sleep(1.5)
-            
         question = questions_map[q_num]
-        print(f"\n--- [STRICT MARKING] Question {q_num} (Max Marks: {question.get('points', 10)}) ---")
         
         # Get rubric from DB (this should contain your JSON data)
         rubric = question.get('marking_scheme') or question.get('rubric') or question.get('marking_guide')
@@ -113,17 +108,19 @@ async def batch_grade_node(state: GradingState):
             max_p = sum(int(m) for m in all_marks)
         else:
             max_p = question.get('points') or 10
+            
+        print(f"\n--- [STRICT MARKING] Question {q_num} (Max Marks: {max_p}) ---")
         
         eval_prompt = (
             f"You are a Senior WAEC Examiner. Your task is to award marks based on the provided OFFICIAL MARKING SCHEME.\n\n"
             f"OFFICIAL MARKING SCHEME for Q{q_num} (Max Marks for this entry: {max_p}):\n{rubric}\n\n"
             "STUDENT WORKINGS (Images attached):\n"
             "INSTRUCTIONS:\n"
-            "1. TRANSCRIBE the student's work for this specific question accurately.\n"
+            "1. TRANSCRIBE the student's work for this specific question accurately. Pay CLOSE attention to handwritten numbers (e.g., a '4' might look like a 'y').\n"
             "2. LOGICAL MATCHING: For every step in the official rubric, check if the student performed the equivalent logic. "
-            "Allow for different notations or rounding (e.g., 18.81 instead of 18.8076).\n"
+            "Allow for different notations or minor rounding.\n"
             "3. STEP-BY-STEP MARKS: Explicitly award marks for each step (M1, A1, B1) if the logic is correct. "
-            "If a student reaches the correct final answer via a valid method, they should receive full marks even if they skipped minor intermediate steps.\n"
+            "If the student's final values (like a=3 or b=7) match the rubric's results, they should receive the 'A' marks even if the intermediate equation looks messy.\n"
             "4. OUTPUT: Provide a summative reasoning that lists exactly which rubric steps were satisfied."
         )
         
@@ -136,6 +133,10 @@ async def batch_grade_node(state: GradingState):
             messages[1].content.append({"type": "image_url", "image_url": {"url": url}})
             
         try:
+            # RATE LIMIT PROTECTION: 3.0 second delay
+            import asyncio
+            await asyncio.sleep(3.0)
+            
             response = await llm.ainvoke(messages)
             content = response.content.replace("```json", "").replace("```", "").strip()
             grading = json.loads(content)
