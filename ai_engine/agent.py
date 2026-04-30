@@ -105,18 +105,28 @@ async def batch_grade_node(state: GradingState):
             print(f"CRITICAL: No specific rubric for Q{q_num}. AI is NOT allowed to guess.")
             rubric = "ERROR: No marking scheme provided. Award 0 marks and state 'Missing Rubric' in feedback."
 
+        # Dynamically detect max marks from rubric text if the points column is missing
+        import re
+        max_marks_from_text = 10
+        match = re.search(r"TOTAL MARKS:\s*(\d+)", rubric)
+        if match:
+            max_marks_from_text = int(match.group(1))
+        
+        # Use DB column if available, else use extracted or default
+        max_p = question.get('points') or max_marks_from_text
+        
         eval_prompt = (
-            f"You are a Senior WAEC Examiner. Your task is to award marks SOLELY based on the provided OFFICIAL MARKING SCHEME.\n\n"
-            f"OFFICIAL MARKING SCHEME for Q{q_num}:\n{rubric}\n\n"
+            f"You are a Senior WAEC Examiner. Award marks SOLELY based on the provided OFFICIAL MARKING SCHEME.\n\n"
+            f"OFFICIAL MARKING SCHEME for Q{q_num} (Maximum Marks: {max_p}):\n{rubric}\n\n"
             "STUDENT WORKINGS (Images attached):\n"
             "1. Transcribe the student's work for this specific question.\n"
-            "2. Match each step of the student's work to the official marking scheme steps.\n"
-            "3. If the work does not match the scheme, award 0 for that step.\n"
-            "4. Provide a summative reasoning for the total marks awarded based strictly on the scheme."
+            "2. Match each step to the marking scheme. Be fair: allow different mathematical notations if the logic is correct.\n"
+            "3. Award marks exactly as per the scheme. DO NOT award more than the maximum marks allowed for this question.\n"
+            "4. Provide a summative reasoning for the total marks awarded."
         )
         
         messages = [
-            SystemMessage(content="Output JSON only: { 'score': int, 'summative_reasoning': 'string', 'ocr_transcript': 'string' }"),
+            SystemMessage(content=f"Output JSON only: {{ 'score': int, 'summative_reasoning': 'string', 'ocr_transcript': 'string' }}. Note: Maximum possible score is {max_p}."),
             HumanMessage(content=[{"type": "text", "text": eval_prompt}])
         ]
         
@@ -128,13 +138,16 @@ async def batch_grade_node(state: GradingState):
             content = response.content.replace("```json", "").replace("```", "").strip()
             grading = json.loads(content)
             
-            score = grading.get("score", 0)
+            # CAP THE SCORE AT MAX MARKS
+            raw_score = grading.get("score", 0)
+            score = min(raw_score, max_p)
+            
             reasoning = grading.get("summative_reasoning", "No reasoning provided.")
             ocr = grading.get("ocr_transcript", "Not extracted.")
             
             print(f"EXTRACTED WORK: \"{ocr[:300]}...\"")
             print(f"RUBRIC COMPLIANCE: {reasoning}")
-            print(f"FINAL MARK: {score}/{question.get('points', 10)}")
+            print(f"FINAL MARK: {score}/{max_p}")
             
             total_score += score
             
