@@ -227,6 +227,7 @@ async def process_full_attempt_grading(attempt_id: str, submissions: List[dict],
         db.table("exam_attempts").update({
             "theory_score": ai_theory_score,
             "total_theory": 100,
+            "theory_completed_at": datetime.utcnow().isoformat(),
             "status": "theory_marked" if current_status != "mcq_marked" else "graded"
         }).eq("id", attempt_id).execute()
         
@@ -277,6 +278,7 @@ async def grade_mcq(attempt_id: str, db=Depends(get_db)):
         db.table("exam_attempts").update({
             "mcq_score": score,
             "total_mcq": len(q_res.data),
+            "mcq_completed_at": datetime.utcnow().isoformat(),
             "status": "mcq_marked" if current_status != "theory_marked" else "graded"
         }).eq("id", attempt_id).execute()
 
