@@ -211,8 +211,18 @@ async def process_full_attempt_grading(attempt_id: str, submissions: List[dict],
         part_b_scores = []
         for res in grading_results:
             try:
-                q_num = int(res.get("question_number", 0))
+                q_num_str = str(res.get("question_number", ""))
+                q_num = int(q_num_str) if q_num_str.isdigit() else 0
                 score = res.get("score", 0)
+                reasoning = res.get("summative_reasoning", "")
+                
+                # Update individual theory submission record with detailed feedback
+                db.table("theory_submissions").update({
+                    "score": score,
+                    "feedback": reasoning,
+                    "status": "graded"
+                }).eq("attempt_id", attempt_id).eq("question_number", q_num_str).execute()
+
                 if 1 <= q_num <= compulsory_count:
                     part_a_score += score
                 else:
@@ -259,26 +269,37 @@ async def grade_mcq(attempt_id: str, db=Depends(get_db)):
         exam_id = attempt_res.data["exam_id"]
         current_status = attempt_res.data["status"]
         
-        q_res = db.table("questions").select("id, marking_scheme").eq("exam_id", exam_id).eq("is_mcq", True).execute()
-        questions_map = {q["id"]: q["marking_scheme"] for q in q_res.data}
+        q_res = db.table("questions").select("id, marking_scheme, question_number").eq("exam_id", exam_id).eq("is_mcq", True).execute()
+        questions_map = {q["id"]: q for q in q_res.data}
 
         score = 0
+        wrong_numbers = []
         import re
         for resp in responses:
             q_id = resp["question_id"]
             student_choice = resp["selected_option"]
-            marking = questions_map.get(q_id) or ""
-            match = re.search(r"Equation:\s*([A-D])\s*=", marking)
-            if match and student_choice == match.group(1):
-                score += 1
-            elif f" {student_choice} =" in marking:
-                score += 1
+            q_data = questions_map.get(q_id, {})
+            marking = q_data.get("marking_scheme") or ""
+            q_num = q_data.get("question_number", "Unknown")
 
-        # 2. Update Granular MCQ Score
+            match = re.search(r"Equation:\s*([A-D])\s*=", marking)
+            is_correct = False
+            if match and student_choice == match.group(1):
+                is_correct = True
+            elif f" {student_choice} =" in marking:
+                is_correct = True
+            
+            if is_correct:
+                score += 1
+            else:
+                wrong_numbers.append(str(q_num))
+
+        # 2. Update Granular MCQ Score and Wrong Numbers
         db.table("exam_attempts").update({
             "mcq_score": score,
             "total_mcq": len(q_res.data),
             "mcq_completed_at": datetime.utcnow().isoformat(),
+            "wrong_mcq_numbers": wrong_numbers,
             "status": "mcq_marked" if current_status != "theory_marked" else "graded"
         }).eq("id", attempt_id).execute()
 
