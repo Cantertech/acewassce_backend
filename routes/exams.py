@@ -54,6 +54,8 @@ async def upload_working(
     Uploads an image file to Supabase Storage and saves the URL to theory_submissions.
     """
     try:
+        print(f"DEBUG: Starting upload for attempt {attempt_id}, general={is_general}")
+        
         # 1. Generate unique filename
         file_extension = file.filename.split(".")[-1]
         is_gen_bool = is_general.lower() == "true"
@@ -62,25 +64,33 @@ async def upload_working(
         
         # 2. OPTIMIZATION: Compress and Resize using Pillow
         raw_content = await file.read()
-        img = Image.open(io.BytesIO(raw_content))
+        print(f"DEBUG: Received file {file.filename}, size {len(raw_content)} bytes")
         
-        # Convert to RGB if necessary (to handle PNG/RGBA)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-            
-        # Resize if too large (Max width 1200px)
-        max_size = 1200
-        if img.width > max_size:
-            ratio = max_size / float(img.width)
-            new_height = int(float(img.height) * float(ratio))
-            img = img.resize((max_size, new_height), Image.Resampling.LANCZOS)
-            
-        # Save to buffer with high compression (Quality 70)
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=70, optimize=True)
-        optimized_content = buffer.getvalue()
-        
+        try:
+            img = Image.open(io.BytesIO(raw_content))
+            # Convert to RGB if necessary (to handle PNG/RGBA)
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+                
+            # Resize if too large (Max width 1200px)
+            max_size = 1200
+            if img.width > max_size:
+                ratio = max_size / float(img.width)
+                new_height = int(float(img.height) * float(ratio))
+                img = img.resize((max_size, new_height), Image.Resampling.LANCZOS)
+                
+            # Save to buffer with high compression (Quality 70)
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=70, optimize=True)
+            optimized_content = buffer.getvalue()
+            print(f"DEBUG: Compression successful. New size {len(optimized_content)} bytes")
+        except Exception as img_err:
+            print(f"ERROR during image processing: {str(img_err)}")
+            # Fallback to original content if Pillow fails
+            optimized_content = raw_content
+
         # 3. Upload to Supabase Storage (bucket: wassce_workings)
+        print(f"DEBUG: Uploading to Supabase bucket 'wassce_workings' at path {file_name}")
         storage_response = db.storage.from_("wassce_workings").upload(
             path=file_name,
             file=optimized_content,
@@ -99,8 +109,12 @@ async def upload_working(
         }
         db.table("theory_submissions").insert(theory_data).execute()
         
+        print(f"DEBUG: Upload and database record created successfully for {file_name}")
         return {"status": "success", "image_url": image_url}
     except Exception as e:
+        print(f"CRITICAL ERROR in upload_working: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/{attempt_id}/grade")
