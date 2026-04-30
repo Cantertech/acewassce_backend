@@ -266,7 +266,7 @@ async def grade_mcq(attempt_id: str, db=Depends(get_db)):
         for resp in responses:
             q_id = resp["question_id"]
             student_choice = resp["selected_option"]
-            marking = questions_map.get(q_id, "")
+            marking = questions_map.get(q_id) or ""
             match = re.search(r"Equation:\s*([A-D])\s*=", marking)
             if match and student_choice == match.group(1):
                 score += 1
