@@ -87,9 +87,12 @@ async def batch_grade_node(state: GradingState):
         question = questions_map[q_num]
         print(f"--- Grading Question {q_num} ---")
         
+        # Robustly get marking scheme
+        rubric = question.get('marking_scheme') or question.get('rubric') or question.get('marking_guide') or "Grade based on standard WAEC marking criteria."
+        
         # Combine all images for this question into one evaluation
         eval_prompt = (
-            f"RUBRIC for Q{q_num}:\n{question['marking_scheme']}\n\n"
+            f"RUBRIC for Q{q_num}:\n{rubric}\n\n"
             "STUDENT WORKINGS (Multiple Images):\n"
         )
         
