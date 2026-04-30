@@ -43,7 +43,7 @@ async def router_node(state: GradingState):
         message = HumanMessage(
             content=[
                 {"type": "text", "text": system_prompt},
-                {"type": "image_url", "image_url": image_url},
+                {"type": "image_url", "image_url": {"url": image_url}},
             ]
         )
         
@@ -72,12 +72,12 @@ async def batch_grade_node(state: GradingState):
     total_score = 0
     
     # 1. Get Exam ID for this attempt to fetch theory questions
-    attempt_res = db.table("exam_attempts").select("exam_id").eq("id", state["attempt_id"]).single()
+    attempt_res = db.table("exam_attempts").select("exam_id").eq("id", state["attempt_id"]).single().execute()
     exam_id = attempt_res.data["exam_id"]
     
     # 2. Fetch all theory questions for this exam
     q_res = db.table("questions").select("*").eq("exam_id", exam_id).eq("is_mcq", False).execute()
-    questions_map = {q["question_number"]: q for q in q_res.data}
+    questions_map = {str(q["question_number"]): q for q in q_res.data}
 
     for q_num, urls in state["routed_work"].items():
         if q_num not in questions_map:
@@ -99,7 +99,7 @@ async def batch_grade_node(state: GradingState):
         ]
         
         for url in urls:
-            messages[1].content.append({"type": "image_url", "image_url": url})
+            messages[1].content.append({"type": "image_url", "image_url": {"url": url}})
             
         try:
             response = await llm.ainvoke(messages)

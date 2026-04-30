@@ -156,23 +156,30 @@ async def process_full_attempt_grading(attempt_id: str, submissions: List[dict],
     """
     Background worker to grade each theory submission using the LangGraph agent.
     """
-    total_score = 0
     try:
-        # In the new flow, we pass ALL submissions to one run_grader call 
-        # which will perform the routing and batch grading.
+        # 1. Fetch current attempt data to get existing score (MCQ)
+        attempt_res = db.table("exam_attempts").select("total_score").eq("id", attempt_id).single().execute()
+        current_mcq_score = attempt_res.data.get("total_score", 0)
+
+        # 2. Run the AI Grader (which routes and grades all images)
         result = await run_grader(
             attempt_id=attempt_id,
             submissions=submissions
         )
-        total_score = result.get("total_score", 0)
+        ai_theory_score = result.get("total_score", 0)
         
-        # Finally, update the main exam_attempt status to 'graded'
+        # 3. Aggregate scores
+        final_score = current_mcq_score + ai_theory_score
+        
+        # 4. Finally, update the main exam_attempt status to 'graded'
         db.table("exam_attempts").update({
             "status": "graded",
-            "total_score": total_score,
+            "total_score": final_score,
             "end_time": datetime.utcnow().isoformat()
         }).eq("id", attempt_id).execute()
         
-        print(f"--- ALL GRADED: Attempt {attempt_id} completed with total score: {total_score} ---")
+        print(f"--- ALL GRADED: Attempt {attempt_id} completed. MCQ: {current_mcq_score}, Theory: {ai_theory_score}, Final: {final_score} ---")
     except Exception as e:
         print(f"CRITICAL ERROR in process_full_attempt_grading: {str(e)}")
+        import traceback
+        traceback.print_exc()
