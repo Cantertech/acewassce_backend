@@ -1,0 +1,11 @@
+langchain-google-genai
+fastapi
+uvicorn
+supabase
+python-dotenv
+pydantic
+langchain
+langchain-core
+langgraph
+httpx
+python-multipart
