@@ -162,8 +162,8 @@ async def aggregate_and_finalize_scores(attempt_id: str, db):
     try:
         # 1. Fetch granular scores
         attempt_res = db.table("exam_attempts").select("mcq_score, theory_score, exam_id").eq("id", attempt_id).single().execute()
-        mcq_raw = attempt_res.data.get("mcq_score", 0)
-        theory_raw = attempt_res.data.get("theory_score", 0)
+        mcq_raw = attempt_res.data.get("mcq_score") or 0
+        theory_raw = attempt_res.data.get("theory_score") or 0
         exam_id = attempt_res.data.get("exam_id")
         
         exam_res = db.table("exams").select("*").eq("id", exam_id).single().execute()
