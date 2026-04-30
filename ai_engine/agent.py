@@ -88,22 +88,31 @@ async def batch_grade_node(state: GradingState):
 
     for q_num, urls in state["routed_work"].items():
         if q_num not in questions_map:
-            print(f"WARNING: Q{q_num} skipped (No marking scheme found).")
+            print(f"WARNING: Q{q_num} skipped (No marking scheme found in database).")
             continue
+            
+        # Rate limit protection: Wait a bit before each question
+        import asyncio
+        await asyncio.sleep(1.5)
             
         question = questions_map[q_num]
         print(f"\n--- [STRICT MARKING] Question {q_num} (Max Marks: {question.get('points', 10)}) ---")
         
-        rubric = question.get('marking_scheme') or question.get('rubric') or question.get('marking_guide') or "Grade based on standard WAEC marking criteria."
+        # Get rubric from DB (this should contain your JSON data)
+        rubric = question.get('marking_scheme') or question.get('rubric') or question.get('marking_guide')
         
+        if not rubric:
+            print(f"CRITICAL: No specific rubric for Q{q_num}. AI is NOT allowed to guess.")
+            rubric = "ERROR: No marking scheme provided. Award 0 marks and state 'Missing Rubric' in feedback."
+
         eval_prompt = (
-            f"You are a Senior WAEC Examiner. Your task is to award marks SOLELY based on the provided MARKING SCHEME.\n\n"
+            f"You are a Senior WAEC Examiner. Your task is to award marks SOLELY based on the provided OFFICIAL MARKING SCHEME.\n\n"
             f"OFFICIAL MARKING SCHEME for Q{q_num}:\n{rubric}\n\n"
             "STUDENT WORKINGS (Images attached):\n"
             "1. Transcribe the student's work for this specific question.\n"
-            "2. Match each step of the student's work to the marking scheme.\n"
-            "3. Award marks for Method (M) and Accuracy (A) exactly as per the scheme.\n"
-            "4. Provide a summative reasoning for the total marks awarded."
+            "2. Match each step of the student's work to the official marking scheme steps.\n"
+            "3. If the work does not match the scheme, award 0 for that step.\n"
+            "4. Provide a summative reasoning for the total marks awarded based strictly on the scheme."
         )
         
         messages = [
