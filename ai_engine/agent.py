@@ -32,39 +32,40 @@ async def router_node(state: GradingState):
     routed = {}
     
     for sub in state['submissions']:
-        image_url = sub['image_url']
-        manual_tags = sub.get("feedback") # We store tags here
-        
-        q_nums = []
-        
-        if manual_tags and manual_tags.strip().lower() != "unknown":
-            # Use Manual Tags provided by the student
-            import re
-            # Split by comma or space and clean up
-            raw_parts = re.split(r'[,|\s]', manual_tags)
-            q_nums = [p.strip() for p in raw_parts if p.strip()]
-            print(f"DEBUG [Router]: Using MANUAL TAGS for Image: {q_nums}")
-        else:
-            # Fallback to AI Identification
-            system_prompt = (
-                "You are a document scanner. Look at this student's handwritten paper. "
-                "Identify EVERY question number present on this page. Students often write multiple answers (e.g., 6, 7, and 8) on one sheet. "
-                "Return a comma-separated list of numbers only (e.g. '6, 7, 8'). If none are found, return 'unknown'."
-            )
-            message = HumanMessage(
-                content=[
-                    {"type": "text", "text": system_prompt},
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                ]
-            )
-            try:
-                response = await llm.ainvoke([message])
-                raw_nums = response.content.strip().lower().replace("questions", "").replace("question", "").replace("q", "").strip()
-                q_nums = [n.strip() for n in raw_nums.split(",") if n.strip()]
-                print(f"DEBUG [Router]: AI Identified Questions: {q_nums if q_nums else 'None'}")
-            except Exception as e:
-                print(f"DEBUG [Router]: AI Identification failed: {e}")
-                q_nums = []
+        try:
+            image_url = sub['image_url']
+            manual_tags = sub.get("feedback") # We store tags here
+            
+            q_nums = []
+            
+            if manual_tags and manual_tags.strip().lower() != "unknown":
+                # Use Manual Tags provided by the student
+                import re
+                # Split by comma or space and clean up
+                raw_parts = re.split(r'[,|\s]', manual_tags)
+                q_nums = [p.strip() for p in raw_parts if p.strip()]
+                print(f"DEBUG [Router]: Using MANUAL TAGS for Image: {q_nums}")
+            else:
+                # Fallback to AI Identification
+                system_prompt = (
+                    "You are a document scanner. Look at this student's handwritten paper. "
+                    "Identify EVERY question number present on this page. Students often write multiple answers (e.g., 6, 7, and 8) on one sheet. "
+                    "Return a comma-separated list of numbers only (e.g. '6, 7, 8'). If none are found, return 'unknown'."
+                )
+                message = HumanMessage(
+                    content=[
+                        {"type": "text", "text": system_prompt},
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                    ]
+                )
+                try:
+                    response = await llm.ainvoke([message])
+                    raw_nums = response.content.strip().lower().replace("questions", "").replace("question", "").replace("q", "").strip()
+                    q_nums = [n.strip() for n in raw_nums.split(",") if n.strip()]
+                    print(f"DEBUG [Router]: AI Identified Questions: {q_nums if q_nums else 'None'}")
+                except Exception as e:
+                    print(f"DEBUG [Router]: AI Identification failed: {e}")
+                    q_nums = []
             
             for q_num in q_nums:
                 if q_num not in routed:
