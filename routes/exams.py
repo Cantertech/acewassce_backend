@@ -47,14 +47,16 @@ async def upload_working(
     attempt_id: str, 
     question_number: Optional[int] = Query(None), 
     is_general: str = Query("false"), 
+    tags: Optional[str] = Form(None), # Capture manual tags
     file: UploadFile = File(...), 
     db=Depends(get_db)
 ):
     """
     Uploads an image file to Supabase Storage and saves the URL to theory_submissions.
+    Uses 'feedback' column to store manual question tags if provided.
     """
     try:
-        print(f"DEBUG: Starting upload for attempt {attempt_id}, general={is_general}")
+        print(f"DEBUG: Starting upload for attempt {attempt_id}, general={is_general}, tags={tags}")
         
         # 1. Generate unique filename
         file_extension = file.filename.split(".")[-1]
@@ -120,7 +122,8 @@ async def upload_working(
             "attempt_id": attempt_id,
             "question_number": question_number,
             "image_url": image_url,
-            "is_general": is_gen_bool
+            "is_general": is_gen_bool,
+            "feedback": tags # Store manual tags here for the router to use
         }
         db.table("theory_submissions").insert(theory_data).execute()
         
@@ -139,7 +142,7 @@ async def trigger_grading(attempt_id: str, background_tasks: BackgroundTasks, db
     """
     try:
         # 1. Fetch all submissions for this attempt
-        response = db.table("theory_submissions").select("id", "image_url", "question_id", "question_number", "is_general").eq("attempt_id", attempt_id).execute()
+        response = db.table("theory_submissions").select("id", "image_url", "question_id", "question_number", "is_general", "feedback").eq("attempt_id", attempt_id).execute()
         submissions = response.data
         
         if not submissions:
