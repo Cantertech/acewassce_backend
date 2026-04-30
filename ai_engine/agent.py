@@ -116,17 +116,20 @@ async def batch_grade_node(state: GradingState):
         max_p = question.get('points') or max_marks_from_text
         
         eval_prompt = (
-            f"You are a Senior WAEC Examiner. Award marks SOLELY based on the provided OFFICIAL MARKING SCHEME.\n\n"
-            f"OFFICIAL MARKING SCHEME for Q{q_num} (Maximum Marks: {max_p}):\n{rubric}\n\n"
+            f"You are a Senior WAEC Examiner. Your task is to award marks based on the provided OFFICIAL MARKING SCHEME.\n\n"
+            f"OFFICIAL MARKING SCHEME for Q{q_num} (Max: {max_p}):\n{rubric}\n\n"
             "STUDENT WORKINGS (Images attached):\n"
-            "1. Transcribe the student's work for this specific question.\n"
-            "2. Match each step to the marking scheme. Be fair: allow different mathematical notations if the logic is correct.\n"
-            "3. Award marks exactly as per the scheme. DO NOT award more than the maximum marks allowed for this question.\n"
-            "4. Provide a summative reasoning for the total marks awarded."
+            "INSTRUCTIONS:\n"
+            "1. TRANSCRIBE the student's work for this specific question accurately.\n"
+            "2. LOGICAL MATCHING: For every step in the official rubric, check if the student performed the equivalent logic. "
+            "Allow for different notations or rounding (e.g., 18.81 instead of 18.8076).\n"
+            "3. STEP-BY-STEP MARKS: Explicitly award marks for each step (M1, A1, B1) if the logic is correct. "
+            "If a student reaches the correct final answer via a valid method, they should receive full marks even if they skipped minor intermediate steps.\n"
+            "4. OUTPUT: Provide a summative reasoning that lists exactly which rubric steps were satisfied."
         )
         
         messages = [
-            SystemMessage(content=f"Output JSON only: {{ 'score': int, 'summative_reasoning': 'string', 'ocr_transcript': 'string' }}. Note: Maximum possible score is {max_p}."),
+            SystemMessage(content=f"You are a highly capable math examiner. Output JSON only: {{ 'score': int, 'summative_reasoning': 'string', 'ocr_transcript': 'string' }}. Note: Maximum possible score is {max_p}."),
             HumanMessage(content=[{"type": "text", "text": eval_prompt}])
         ]
         
