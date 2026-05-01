@@ -224,8 +224,7 @@ async def process_full_attempt_grading(attempt_id: str, submissions: List[dict],
                 # NOTE: DB uses 'marks_attained' not 'score'
                 db.table("theory_submissions").update({
                     "marks_attained": score,
-                    "feedback": f"[EXAMINER REASONING]: {reasoning}",
-                    "status": "graded"
+                    "feedback": f"[EXAMINER REASONING]: {reasoning}"
                 }).eq("attempt_id", attempt_id).eq("question_number", q_num_str).execute()
 
                 if 1 <= q_num <= compulsory_count:
@@ -265,7 +264,7 @@ async def grade_mcq(attempt_id: str, db=Depends(get_db)):
     """
     Grades MCQ and stores results in the new granular columns.
     """
-    print(f"🚀 GRADING MCQs for attempt: {attempt_id}")
+    print(f"GRADING MCQs for attempt: {attempt_id}")
     try:
         # 1. Fetch student responses
         res = db.table("exam_responses").select("*").eq("attempt_id", attempt_id).execute()

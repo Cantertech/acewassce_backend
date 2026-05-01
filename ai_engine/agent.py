@@ -84,9 +84,9 @@ async def router_node(state: GradingState):
 
 async def batch_grade_node(state: GradingState):
     """
-    Grades each identified question group against the marking scheme with strict adherence.
+    Grades identified questions by grouping those that share the same images to optimize cost.
     """
-    print(f"--- [NODE: Batch Grade] Commencing strict rubric-based evaluation ---")
+    print(f"--- [NODE: Batch Grade] Optimizing via Question Grouping ---")
     llm = ChatOpenAI(model="gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
     db = get_db()
     
@@ -101,92 +101,81 @@ async def batch_grade_node(state: GradingState):
     q_res = db.table("questions").select("*").eq("exam_id", exam_id).eq("is_mcq", False).execute()
     questions_map = {str(q["question_number"]): q for q in q_res.data}
 
+    # 3. Group by Image Set (URL combinations)
+    image_groups = {} # { tuple(sorted_urls): [q_nums] }
     for q_num, urls in state["routed_work"].items():
-        if q_num not in questions_map:
-            print(f"WARNING: Q{q_num} skipped (No marking scheme found in database).")
-            continue
-            
-        question = questions_map[q_num]
-        
-        # Get rubric from DB (this should contain your JSON data)
-        rubric = question.get('marking_scheme') or question.get('rubric') or question.get('marking_guide')
-        
-        if not rubric:
-            print(f"CRITICAL: No specific rubric for Q{q_num}. AI is NOT allowed to guess.")
-            rubric = "ERROR: No marking scheme provided. Award 0 marks and state 'Missing Rubric' in feedback."
+        if q_num not in questions_map: continue
+        url_key = tuple(sorted(urls))
+        if url_key not in image_groups:
+            image_groups[url_key] = []
+        image_groups[url_key].append(q_num)
 
-        # Dynamically calculate total marks by summing all sub-part marks found in the rubric
-        import re
-        # This matches "(Marks: 12)" or "TOTAL MARKS: 12"
-        all_marks = re.findall(r"(?:Marks:|TOTAL MARKS:)\s*(\d+)", rubric)
-        if all_marks:
-            max_p = sum(int(m) for m in all_marks)
-        else:
-            max_p = question.get('points') or 10
-            
-        print(f"\n--- [STRICT MARKING] Question {q_num} (Max Marks: {max_p}) ---")
+    for urls, q_nums in image_groups.items():
+        print(f"\n--- [BUNDLE] Grading Questions {q_nums} across {len(urls)} images ---")
         
+        # Prepare rubrics bundle
+        rubrics_text = ""
+        for q_num in q_nums:
+            question = questions_map[q_num]
+            rubric = question.get('marking_scheme') or question.get('rubric') or "Missing Rubric."
+            
+            # Sum up max marks for this question
+            import re
+            all_marks = re.findall(r"(?:Marks:|TOTAL MARKS:)\s*(\d+)", rubric)
+            max_p = sum(int(m) for m in all_marks) if all_marks else (question.get('points') or 10)
+            
+            rubrics_text += f"\n[RUBRIC FOR Q{q_num}] (Max Marks: {max_p}):\n{rubric}\n"
+
         eval_prompt = (
-            f"You are a Senior WAEC Examiner. Your task is to award marks based on the provided OFFICIAL MARKING SCHEME.\n\n"
-            f"OFFICIAL MARKING SCHEME for Q{q_num} (Max Marks for this entry: {max_p}):\n{rubric}\n\n"
-            "STUDENT WORKINGS (Images attached):\n"
+            f"You are a Senior WAEC Examiner. Grade the following questions based on the attached images and official rubrics.\n\n"
+            f"{rubrics_text}\n"
             "INSTRUCTIONS:\n"
-            "1. TRANSCRIBE the student's work for this specific question accurately. Pay CLOSE attention to handwritten numbers (e.g., a '4' might look like a 'y').\n"
-            "2. LOGICAL MATCHING: For every step in the official rubric, check if the student performed the equivalent logic. "
-            "Allow for different notations or minor rounding.\n"
-            "3. STEP-BY-STEP MARKS: Explicitly award marks for each step (M1, A1, B1) if the logic is correct. "
-            "If the student's final values (like a=3 or b=7) match the rubric's results, they should receive the 'A' marks even if the intermediate equation looks messy.\n"
-            "4. OUTPUT: Provide a summative reasoning that lists exactly which rubric steps were satisfied."
+            "1. TRANSCRIBE the work for each question accurately.\n"
+            "2. Award marks (M1, A1, B1) based on the specific rubric for each question.\n"
+            "3. OUTPUT: Return a list of objects, one for each question number requested."
         )
         
         messages = [
-            SystemMessage(content=f"You are a highly capable math examiner. Output JSON only: {{ 'score': int, 'summative_reasoning': 'string', 'ocr_transcript': 'string' }}. Note: Maximum possible score is {max_p}."),
+            SystemMessage(content=(
+                "Output JSON only: { 'results': [ "
+                "{ 'question_number': int, 'score': int, 'summative_reasoning': 'string', 'ocr_transcript': 'string' } "
+                "] }"
+            )),
             HumanMessage(content=[{"type": "text", "text": eval_prompt}])
         ]
         
         for url in urls:
             messages[1].content.append({"type": "image_url", "image_url": {"url": url}})
             
-        for attempt in range(5): # Retry up to 5 times
+        for attempt in range(3): # Retry
             try:
-                # RATE LIMIT PROTECTION: 3.0 second delay
                 import asyncio
-                await asyncio.sleep(3.0)
+                await asyncio.sleep(2.0)
                 
                 response = await llm.ainvoke(messages)
                 content = response.content.replace("```json", "").replace("```", "").strip()
-                grading = json.loads(content)
+                data = json.loads(content)
+                bundle_results = data.get("results", [])
                 
-                # CAP THE SCORE AT MAX MARKS
-                raw_score = grading.get("score", 0)
-                score = min(raw_score, max_p)
-                
-                reasoning = grading.get("summative_reasoning", "No reasoning provided.")
-                ocr = grading.get("ocr_transcript", "Not extracted.")
-                
-                print(f"EXTRACTED WORK: \"{ocr[:300]}...\"")
-                print(f"RUBRIC COMPLIANCE: {reasoning}")
-                print(f"FINAL MARK: {score}/{max_p}")
-                
-                total_score += score
-                
-                results.append({
-                    "question_number": q_num, 
-                    "score": score, 
-                    "summative_reasoning": reasoning,
-                    "ocr": ocr
-                })
-                break # Exit the retry loop on success
+                for res in bundle_results:
+                    qn = str(res.get("question_number"))
+                    score = res.get("score", 0)
+                    reasoning = res.get("summative_reasoning", "No reasoning.")
+                    ocr = res.get("ocr_transcript", "No OCR.")
+                    
+                    print(f" -> Q{qn}: {score} Marks | {reasoning[:60]}...")
+                    
+                    total_score += score
+                    results.append({
+                        "question_number": qn,
+                        "score": score,
+                        "summative_reasoning": reasoning,
+                        "ocr": ocr
+                    })
+                break
             except Exception as e:
-                error_msg = str(e).lower()
-                if "rate limit" in error_msg or "429" in error_msg:
-                    wait_time = (attempt + 1) * 5 # wait 5s, 10s, 15s...
-                    print(f"!!! RATE LIMIT HIT on Q{q_num}: Waiting {wait_time}s before retry {attempt + 1}/5...")
-                    import asyncio
-                    await asyncio.sleep(wait_time)
-                else:
-                    print(f"!!! FAILURE GRADING Q{q_num}: {e}")
-                    break # Break on non-rate-limit errors
+                print(f"!!! Error in Bundle {q_nums}: {e}")
+                if attempt == 2: break
 
     state["grading_results"] = results
     state["total_score"] = total_score
@@ -217,6 +206,6 @@ async def run_grader(attempt_id: str, submissions: List[dict]):
         "total_score": 0
     }
     
-    print(f"🚀 Launching Batch AI Grader for attempt: {attempt_id}")
+    print(f"Launching Batch AI Grader for attempt: {attempt_id}")
     final_output = await ace_wassce_grader.ainvoke(initial_state)
     return final_output
